@@ -6,7 +6,7 @@ RUN chown node:node -R /app
 
 USER node
 
-COPY . .
+COPY src .
 
 RUN yarn
 

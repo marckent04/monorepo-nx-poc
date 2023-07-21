@@ -1,0 +1,107 @@
+name: REPOSITORY
+run-name: ${{ github.actor }} run build for repository 🚀
+on:
+  workflow_dispatch
+
+env:
+  VAULT_URL: https://vault.factory.adeo.cloud
+  VAULT_NAMESPACE: adeo/lpi
+  APP: lpi-step-consumer
+  DOCKER_TAG: ${{ github.event.inputs.docker_tag }}
+  TURBINE_ENV: scdp-lpi-dev
+  TURBINE_COMPONENT: lpi-step-consumer
+  NX_APP: api
+  DIRECTORY: apps/api
+  WORKFLOW_ARTIFACT_NAME: build-${{github.run_id}}
+
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  install_dependencies:
+    name: Install dependencies & Build & Check code quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout sources
+        with:
+          fetch-depth: 0
+
+      - uses: nrwl/nx-set-shas@v3
+      - name: install deps
+        run: yarn
+
+      - name: lint
+        run: npx nx lint ${{ env.NX_APP }}
+
+      - name: test
+        run: npx nx test ${{ env.NX_APP }} --configuration=ci
+
+      - name: build
+        run: npx nx build ${{ env.NX_APP }}
+
+      - name: show dir
+        run: ls dist/${{ env.DIRECTORY }}
+
+      - name: 'Code quality: Import sonar token from vault'
+        uses: adeo/vault-action@v1
+        with:
+          vault-namespace: ${{env.VAULT_NAMESPACE}}
+          vault-jwt-role-name: ${{ github.event.repository.name }}
+          vault-secrets: |
+            secret/data/_services/sonar token_repo  | SONAR_TOKEN;
+
+      - name: 'Code quality: scan SonarQube'
+        uses: adeo/sonarqube--scan-action@v1
+        with:
+          sonar-project-key: adeo-lmdb:adeo-lmdb--repository
+          sonar-token: ${{ env.SONAR_TOKEN }}
+          working-directory: ${{env.DIRECTORY}}
+
+      - name: Upload artifact between job
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{env.WORKFLOW_ARTIFACT_NAME}}
+          path: |
+            dist/${{env.DIRECTORY}}/
+          retention-days: 1
+
+  install:
+    name: Upload docker image on JFROG
+    needs: install_dependencies
+    runs-on: [self-hosted, Linux, standard]
+    steps:
+      - name: Download a single artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{env.WORKFLOW_ARTIFACT_NAME}}
+
+      - name: Import secrets from vault
+        uses: adeo/vault-action@v1
+        with:
+          vault-namespace: ${{env.VAULT_NAMESPACE}}
+          vault-jwt-role-name: ${{ github.event.repository.name }}
+          vault-secrets: |
+            secret/data/CI jfrog_dev_repo_url  | JFROG_DEV_REPO_URL;
+            secret/data/CI jfrog_writer_user_name  | JFROG_WRITER_USERNAME;
+            secret/data/CI jfrog_writer_user_token  | JFROG_WRITER_PASSWORD;
+
+      - name: Login to JFROG Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.JFROG_DEV_REPO_URL }}
+          username: ${{ env.JFROG_WRITER_USERNAME }}
+          password: ${{ env.JFROG_WRITER_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          file: Dockerfile
+          context: ./
+          push: true
+          tags: ${{env.JFROG_DEV_REPO_URL}}/${{env.APP}}:${{env.DOCKER_TAG}}

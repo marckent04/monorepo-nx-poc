@@ -1,0 +1,201 @@
+name: merge on main CI
+run-name: ${{ github.actor }} run build and merge on main 🚀
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  VAULT_URL: https://vault.factory.adeo.cloud
+  VAULT_NAMESPACE: adeo/lpi
+  WORKFLOW_ARTIFACT_NAME: build-${{github.run_id}}
+  DOCKER_TAG: latest
+  TURBINE_ENV: scdp-lpi-dev
+  TURBINE_COMPONENT_REPOSITORY: lpi-repository
+  TURBINE_COMPONENT_ORCHESTRATOR: lpi-orchestrator
+  TURBINE_COMPONENT_STEPCONSUMER: lpi-step-consumer
+  TURBINE_COMPONENT_BFF: lpi-bff
+  TURBINE_COMPONENT_FRONT: lpi-front-vue
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency: main_merge
+
+jobs:
+  api:
+    name: build and publish api
+    runs-on: [ self-hosted, Linux, standard ]
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout sources
+
+      - name: Run repository workflow
+        uses: convictional/trigger-workflow-and-wait@v1.6.1
+        with:
+          owner: adeo
+          repo: adeo-lmdb
+          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          workflow_file_name: workflow-repository.yml
+          ref: ${{ github.head_ref }}
+          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+          trigger_workflow: true
+          wait_workflow: true
+
+      - name: Import secrets from vault
+        uses: adeo/vault-action@v1
+        with:
+          vault-namespace: ${{env.VAULT_NAMESPACE}}
+          vault-jwt-role-name: ${{ github.event.repository.name }}
+          vault-secrets: |
+            secret/data/CI turbine_token  | TURBINE_TOKEN;
+
+      - name: Turbine Deploy repository on ${{env.TURBINE_ENV}}
+        uses: adeo/turbine-deploy-action@v1
+        with:
+          token: ${{ env.TURBINE_TOKEN }}
+          environment: ${{env.TURBINE_ENV}}
+          component: ${{env.TURBINE_COMPONENT_REPOSITORY}}
+          version: ${{env.DOCKER_TAG}}
+
+#  orchestrator:
+#    name: build and publish orchestrator
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Run orchestrator workflow
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-orchestrator.yml
+#          ref: ${{ github.head_ref }}
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy orchestrator on ${{env.TURBINE_ENV}}
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_ORCHESTRATOR}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#  stepconsumer:
+#    name: build and publish step consumer
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Run step-consumer workflow
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-step-consumer.yml
+#          ref: ${{ github.head_ref }}
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy step consumer on ${{env.TURBINE_ENV}}
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_STEPCONSUMER}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#  bff:
+#    name: build and publish bff
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Run bff workflow
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-bff.yml
+#          ref: ${{ github.head_ref }}
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy bff on ${{env.TURBINE_ENV}}
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_BFF}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#  front:
+#    name: build and publish front (vue)
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Run front (vue) workflow
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-lpi-vue.yml
+#          ref: ${{ github.head_ref }}
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy front (vue) on ${{env.TURBINE_ENV}}
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_FRONT}}
+#          version: ${{env.DOCKER_TAG}}

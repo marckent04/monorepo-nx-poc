@@ -1,0 +1,451 @@
+name: pull request CI
+run-name: ${{ github.actor }} run pull request checks 🚀
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  VAULT_URL: https://vault.factory.adeo.cloud
+  VAULT_NAMESPACE: adeo/lpi
+  WORKFLOW_ARTIFACT_NAME: build-${{github.run_id}}
+  TEST_DIRECTORY: adeo-lmdb-e2e
+  TURBINE_ENV: scdp-lpi-qa
+  TURBINE_COMPONENT_REPOSITORY: lpi-repository
+  TURBINE_COMPONENT_ORCHESTRATOR: lpi-orchestrator
+  TURBINE_COMPONENT_STEPCONSUMER: lpi-step-consumer
+  TURBINE_COMPONENT_FRONT: lpi-front-vue
+  TURBINE_COMPONENT_BFF: lpi-bff
+  MAIN_DOCKER_TAG: latest
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency: testing_environment
+
+jobs:
+
+  branchname:
+    name: compute branch name for docker tag
+    runs-on: [ self-hosted, Linux, standard ]
+    outputs:
+      DOCKER_TAG: ${{ steps.vars.outputs.DOCKER_TAG }}
+    steps:
+      - name: Get branch name
+        id: vars
+        run: echo "DOCKER_TAG=$(echo ${{ github.head_ref }} | tr / _)" >> $GITHUB_OUTPUT
+  repository:
+    name: build and publish repository if modified
+    needs: [ branchname ]
+    env:
+      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+    runs-on: [ self-hosted, Linux, standard ]
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout sources
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v35
+        with:
+          path: 'apps/api'
+          diff_relative: true
+          files: |
+            **
+            *
+
+      - name: List all changed files
+        run: |
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            echo "$file was changed"
+          done
+
+      - name: Run repository workflow
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: convictional/trigger-workflow-and-wait@v1.6.1
+        with:
+          owner: adeo
+          repo: adeo-lmdb
+          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          workflow_file_name: workflow-repository.yml
+          ref: ${{ github.head_ref }}
+          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+          trigger_workflow: true
+          wait_workflow: true
+
+      - name: Import secrets from vault
+        uses: adeo/vault-action@v1
+        with:
+          vault-namespace: ${{env.VAULT_NAMESPACE}}
+          vault-jwt-role-name: ${{ github.event.repository.name }}
+          vault-secrets: |
+            secret/data/CI turbine_token  | TURBINE_TOKEN;
+
+      - name: Turbine Deploy ${{env.DOCKER_TAG}} repository on ${{env.TURBINE_ENV}}
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: adeo/turbine-deploy-action@v1
+        with:
+          token: ${{ env.TURBINE_TOKEN }}
+          environment: ${{env.TURBINE_ENV}}
+          component: ${{env.TURBINE_COMPONENT_REPOSITORY}}
+          version: ${{env.DOCKER_TAG}}
+
+      - name: Turbine Deploy ${{env.MAIN_DOCKER_TAG}} version repository on ${{env.TURBINE_ENV}}
+        if: steps.changed-files.outputs.any_changed == 'false'
+        uses: adeo/turbine-deploy-action@v1
+        with:
+          token: ${{ env.TURBINE_TOKEN }}
+          environment: ${{env.TURBINE_ENV}}
+          component: ${{env.TURBINE_COMPONENT_REPOSITORY}}
+          version: ${{env.MAIN_DOCKER_TAG}}
+
+#  orchestrator:
+#    name: build and publish orchestrator if modified
+#    needs: [ branchname ]
+#    env:
+#      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Get changed files
+#        id: changed-files
+#        uses: tj-actions/changed-files@v35
+#        with:
+#          path: 'adeo-lmdb--orchestrator/'
+#          diff_relative: true
+#          files: |
+#            **
+#            *
+#
+#      - name: List all changed files
+#        run: |
+#          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+#            echo "$file was changed"
+#          done
+#
+#      - name: Run orchestrator workflow
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-orchestrator.yml
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          ref: ${{ github.head_ref }}
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy ${{env.DOCKER_TAG}} orchestrator on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_ORCHESTRATOR}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#      - name: Turbine Deploy ${{env.MAIN_DOCKER_TAG}} version orchestrator on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'false'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_ORCHESTRATOR}}
+#          version: ${{env.MAIN_DOCKER_TAG}}
+#
+#  stepconsumer:
+#    name: build and publish step consumer if modified
+#    runs-on: [ self-hosted, Linux, standard ]
+#    needs: [ branchname ]
+#    env:
+#      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Get changed files
+#        id: changed-files
+#        uses: tj-actions/changed-files@v35
+#        with:
+#          path: 'adeo-lmdb--step-consumer/'
+#          diff_relative: true
+#          files: |
+#            **
+#            *
+#
+#      - name: List all changed files
+#        run: |
+#          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+#            echo "$file was changed"
+#          done
+#
+#      - name: Run step-consumer workflow
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-step-consumer.yml
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          ref: ${{ github.head_ref }}
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy ${{env.DOCKER_TAG}} stepconsumer on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_STEPCONSUMER}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#      - name: Turbine Deploy ${{env.MAIN_DOCKER_TAG}} version stepconsumer on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'false'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_STEPCONSUMER}}
+#          version: ${{env.MAIN_DOCKER_TAG}}
+#
+#  bff:
+#    name: build and publish bff if modified
+#    runs-on: [ self-hosted, Linux, standard ]
+#    needs: [ branchname ]
+#    env:
+#      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Get changed files
+#        id: changed-files
+#        uses: tj-actions/changed-files@v35
+#        with:
+#          path: 'adeo-lmdb--bff/'
+#          diff_relative: true
+#          files: |
+#            **
+#            *
+#
+#      - name: List all changed files
+#        run: |
+#          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+#            echo "$file was changed"
+#          done
+#
+#      - name: Run bff workflow
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-bff.yml
+#          ref: ${{ github.head_ref }}
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy ${{env.DOCKER_TAG}} bff on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_BFF}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#      - name: Turbine Deploy ${{env.MAIN_DOCKER_TAG}} version bff on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'false'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_BFF}}
+#          version: ${{env.MAIN_DOCKER_TAG}}
+#
+#  front:
+#    name: build and publish front (lpi-vue) if modified
+#    runs-on: [ self-hosted, Linux, standard ]
+#    needs: [ branchname ]
+#    env:
+#      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Get changed files
+#        id: changed-files
+#        uses: tj-actions/changed-files@v35
+#        with:
+#          path: 'lpi-vue/'
+#          diff_relative: true
+#          files: |
+#            **
+#            *
+#
+#      - name: List all changed files
+#        run: |
+#          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+#            echo "$file was changed"
+#          done
+#
+#      - name: Run front workflow
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-lpi-vue.yml
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          ref: ${{ github.head_ref }}
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/CI turbine_token  | TURBINE_TOKEN;
+#
+#      - name: Turbine Deploy ${{env.DOCKER_TAG}} front on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'true'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_FRONT}}
+#          version: ${{env.DOCKER_TAG}}
+#
+#      - name: Turbine Deploy ${{env.MAIN_DOCKER_TAG}} version front on ${{env.TURBINE_ENV}}
+#        if: steps.changed-files.outputs.any_changed == 'false'
+#        uses: adeo/turbine-deploy-action@v1
+#        with:
+#          token: ${{ env.TURBINE_TOKEN }}
+#          environment: ${{env.TURBINE_ENV}}
+#          component: ${{env.TURBINE_COMPONENT_FRONT}}
+#          version: ${{env.MAIN_DOCKER_TAG}}
+#
+#  tests:
+#    name: check quality gate of e2e if modified
+#    runs-on: [ self-hosted, Linux, standard ]
+#    needs: [ branchname ]
+#    env:
+#      DOCKER_TAG: "${{ needs.branchname.outputs.DOCKER_TAG }}"
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: Get changed files
+#        id: changed-files
+#        uses: tj-actions/changed-files@v35
+#        with:
+#          path: 'adeo-lmdb-e2e/'
+#          diff_relative: true
+#          files: |
+#            **
+#            *
+#
+#      - name: List all changed files
+#        run: |
+#          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+#            echo "$file was changed"
+#          done
+#
+#      - name: Run e2e workflow
+#        if: steps.changed-files.outputs.any_changed == ''
+#        uses: convictional/trigger-workflow-and-wait@v1.6.1
+#        with:
+#          owner: adeo
+#          repo: adeo-lmdb
+#          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+#          workflow_file_name: workflow-e2e.yml
+#          client_payload: '{ "docker_tag": "${{ env.DOCKER_TAG }}"}'
+#          ref: ${{ github.head_ref }}
+#          trigger_workflow: true
+#          wait_workflow: true
+#
+#  executetests:
+#    if: github.event.pull_request.draft == false
+#    name: Execute e2e tests
+#    needs: [ repository, orchestrator, bff, stepconsumer, tests, front]
+#    runs-on: [ self-hosted, Linux, standard ]
+#    steps:
+#      - uses: actions/checkout@v3
+#        name: Checkout sources
+#
+#      - name: yarn install
+#        run: yarn install
+#        working-directory: ${{env.TEST_DIRECTORY}}
+#
+#      - name: Import secrets from vault
+#        uses: adeo/vault-action@v1
+#        with:
+#          vault-namespace: ${{env.VAULT_NAMESPACE}}
+#          vault-jwt-role-name: ${{ github.event.repository.name }}
+#          vault-secrets: |
+#            secret/data/lpi-e2e DEV_MODE  | DEV_MODE;
+#            secret/data/lpi-e2e DATABASE_HOST  | DATABASE_HOST;
+#            secret/data/lpi-e2e DATABASE_PORT  | DATABASE_PORT;
+#            secret/data/lpi-e2e DATABASE_USERNAME  | DATABASE_USERNAME;
+#            secret/data/lpi-e2e DATABASE_PASSWORD  | DATABASE_PASSWORD;
+#            secret/data/lpi-e2e DATABASE_NAME  | DATABASE_NAME;
+#            secret/data/lpi-e2e DATABASE_LOGGING  | DATABASE_LOGGING;
+#            secret/data/lpi-e2e DATABASE_SSL  | DATABASE_SSL;
+#            secret/data/lpi-e2e REPOSITORY_URL  | REPOSITORY_URL;
+#            secret/data/lpi-e2e REPOSITORY_TIMEOUT  | REPOSITORY_TIMEOUT;
+#            secret/data/lpi-e2e ENABLE_BROWSER  | ENABLE_BROWSER;
+#            secret/data/lpi-e2e BROWSER_SLOWMOW_TIME  | BROWSER_SLOWMOW_TIME;
+#            secret/data/lpi-e2e FRONTEND_URL  | FRONTEND_URL;
+#            secret/data/lpi-e2e FRONTEND_PING_REDIRECT_URL  | FRONTEND_PING_REDIRECT_URL;
+#
+#      - name: Set up Node
+#        uses: actions/setup-node@v3
+#        with:
+#          node-version: 16
+#
+#      - name: Execute the test suite
+#        continue-on-error: false
+#        run: npx cucumber-js -p ci --exit src/acceptance/${{ '**/*.feature' }}
+#        working-directory: ${{env.TEST_DIRECTORY}}
+#
+#      - name: Upload cucumber report
+#        if: always()
+#        uses: actions/upload-artifact@v3
+#        with:
+#          name: cucumber-report
+#          path: adeo-lmdb-e2e/cucumber-report.html
