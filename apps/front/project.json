@@ -7,7 +7,7 @@
     "build": {
       "executor": "@nx-plus/vue:browser",
       "options": {
-        "dest": "dist/apps/front",
+        "dest": "dist/front",
         "index": "apps/front/public/index.html",
         "main": "apps/front/src/main.ts",
         "tsConfig": "apps/front/tsconfig.app.json"
